@@ -1,0 +1,342 @@
+---
+title: "ML No Supervisado - Obligatorio"
+author: "del Palacio - González"
+date: "12/04/2019"
+geometry: "left=3cm,right=3cm,top=2cm,bottom=2cm"
+output:
+  pdf_document:
+    df_print: kable
+    toc: true
+    toc_depth: 2
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Librerías
+library(dplyr)
+library(gtools)
+library(clustertend)
+library(tidyr)
+library(factoextra)
+library(cluster)
+library(tibble)
+library(rattle)
+library(kableExtra)
+library(pander)
+library(tibble)
+options(digits = 2)
+
+# Carga de Datos
+accionesini <- read.csv('equity.csv', row.names = 2)
+calificaciones <- read.csv('notas.csv')
+
+# Estandarización
+acciones <- accionesini[,-1]
+accionesz<- data.frame(acciones[,1:2], scale(acciones[,3:6]))
+
+# 3- Selección de Variables
+
+#Combinaciones de a 2 variables
+combi<-combinations(n = 4, r = 2, names(acciones[,3:6]))
+chopkins <- c()
+set.seed(1)
+for (i in 1:nrow(combi)){
+  thopkink <- get_clust_tendency(accionesz[,combi[i,]], n=50, graph = FALSE)
+  chopkins <- rbind(chopkins,thopkink)
+}
+eleccion <- data.frame(combi,chopkins)
+
+#Combinaciones de a 3 variables
+combi2<-combinations(n = 4, r = 3, names(acciones[,3:6]))
+chopkins2 <- c()
+for (i in 1:nrow(combi2)){
+  thopkink2 <- get_clust_tendency(accionesz[,combi2[i,]], n=50, graph = FALSE)
+  chopkins2 <- rbind(chopkins2,thopkink2)
+}
+eleccion2 <- data.frame(combi2,chopkins2)
+
+#Conservando las 4 variables continuas
+eleccion3 <- get_clust_tendency(accionesz[,3:6], n=50, graph = FALSE)
+
+# 4- Clustering inicial
+#b-
+solucion <- kmeans(accionesz[,3:4], 3)
+n = 1e2
+almacen <- numeric(n)
+for(i in 1:n) {
+  set.seed(i)
+  q <- kmeans(accionesz[,3:4], 3)
+  almacen[i] <- q$tot.withinss
+}
+
+#hallamos la seed que genera la mínima distancia intra clusters
+m <- match(min(almacen), almacen)
+
+#usamos la seed anterior para kmeans
+set.seed(m)
+q <- kmeans(accionesz[,3:4], 3)
+
+#verificación
+q$tot.withinss
+
+#Asignación
+accionesz$cluster <- q$cluster
+acciones$cluster <- q$cluster
+
+
+#5) Rating Crediticio
+#a)
+calificaciones <- gather(calificaciones, key = "pais", value = "calificacion", -X)
+calificaciones$calificacion <- case_when(calificaciones$calificacion == "A" ~ 3,
+                                         calificaciones$calificacion == "B" ~ 2,
+                                         TRUE ~ 1)
+
+names(calificaciones) <- c("sector", "country", "score")
+
+#b)
+db <- data.frame(left_join(acciones, calificaciones, by= c("sector","country")),row.names = rownames(acciones))
+
+#6) Clustering avanzado
+#a)
+db1 <- db[, c(3,4,8)]
+
+#b)
+distancia<- daisy(db1,  weights = c(1,1,0.6), metric = "gower")
+
+#d)
+h <- hclust(distancia, method = 'complete')
+
+#e)
+z <- cutree(h, k = 3)
+acciones$clusterh <- z
+
+#f)
+centros <- centers.hclust(db1, h, nclust = 3)
+
+#8) Visualizacion
+d1 <- daisy(acciones,  weights = c(0,0,1,1,0,0,0,0), metric = "euclidean")
+a<-data.frame(cmdscale(d1, 2),acciones$cluster) 
+
+b<- data.frame(cmdscale(distancia, 2),acciones$clusterh) 
+
+#9) Asignación
+acciones$cliente <- case_when(acciones$clusterh == 1 ~ "Conservador",
+                              acciones$clusterh == 2 ~ "Crecimiento",
+                              TRUE ~ "Especulativo") 
+Conser<-acciones %>% filter(cliente=="Conservador") %>% select(1,2) %>% as.data.frame()  %>% 
+  table() %>% as.data.frame() %>% filter(Freq != 0) %>% group_by(country) %>% arrange(desc(Freq)) 
+
+Creci<-acciones %>% filter(cliente=="Crecimiento") %>% select(1,2) %>% as.data.frame()  %>% 
+  table() %>% as.data.frame() %>% filter(Freq != 0) %>% group_by(country) %>% arrange(desc(Freq)) 
+
+Espe<-acciones %>% filter(cliente=="Especulativo") %>% select(1,2) %>% as.data.frame()  %>% 
+  table() %>% as.data.frame() %>% filter(Freq != 0) %>% group_by(country) %>% arrange(desc(Freq)) 
+
+
+```
+
+## 1. Conocimiento Específico
+```{r echo=FALSE}
+par(mfrow = c(1,1), pch=16)
+plot(acciones$beta, acciones$div, xlab = "beta de mercado", ylab = "dividendos en %")
+abline(lm(acciones$div~acciones$beta), col="red", lwd = 3)
+```
+
+Gráficamente se puede confrimar el conocimiento específico adquirido. Para las acciones que presentan una menor volatilidad que el mercado (menor *beta*) se espera un pago de *dividendos* más alto. Para acciones que presentan mayor nivel de volatilidad, se observa una caída en los *dividendos* pagados, dado que su rentabilidad viene dada por la suba *esperada* del precio de la misma.
+
+## 2. Datos
+
+### Descripción de los datos y variables continuas:
+
+```{r, echo=FALSE}
+glimpse(accionesini)
+kable(summary(accionesini[,-1]), format = "latex") %>% 
+  kable_styling(latex_options="scale_down")
+```
+
+### Estandarización de Variables Continuas
+
+```{r, echo=FALSE}
+panderOptions('round', 2)
+kable(summary(accionesz[,-7]), format = "latex") %>% 
+  kable_styling(latex_options="scale_down")
+```
+
+Cuando se trabaja con algoritmos de Cluster las distintas agrupaciones son definidas según la distancia de las observaciones en el espacio matemático. 
+Trabajar con variables estandarizadas elimina la posible distorsión en el cálculo de la distancia cuando las unidades de medida de las variables no son comparables o existen diferencias de escala.  
+
+
+```{r, echo=FALSE}
+par(mfrow = c(1,1), pch=16)
+plot(accionesz$beta, accionesz$div,  xlab = "beta de mercado", ylab = "dividendos en %", main = "Ejes Estandarizados")
+abline(lm(accionesz$div~accionesz$beta), col="red", lwd = 3)
+```
+
+
+## 3. Selección de Variables
+
+### Subconjuntos posibles de variables continuas
+
+```{r, echo=FALSE}
+par(mfrow = c(2,1))
+kable(combi, format = "latex")
+kable(combi2, format = "latex")
+```
+
+### Resultados test de Hopkins para los distintos sub-conjuntos de variables
+
+```{r, echo=FALSE}
+format(remove_rownames(eleccion[,-c(0,4)]), digits = 2)
+format(remove_rownames(eleccion2[,-c(0,5)]), digits = 2)
+```
+
+En función de los resultados de los distintos test de hopkins realizados, la mejor alternativa es conservar las variables que presentan mayor estructura: **beta** y **div**.
+
+## 4. Clustering inicial
+### Criterio Gap
+
+```{r, echo=FALSE}
+fviz_nbclust(accionesz[,3:4], FUNcluster = kmeans, method = "gap_stat", nboot = 50,
+             k.max = 10, verbose = FALSE, nstart = 50) +
+  labs(title = "Número óptimo de clusters")
+```
+
+### Kmeans
+
+Una vez definido el número de clusters, según el criterio de **Estadístico Gap**, el algoritmo **kmeans** generará los centroides iniciales de cada cluster en forma aleatoria. Esto implica que la solución que se encontrará será un óptimo local dependiente del punto de partida aleatorio de los centroides. 
+Una buena práctica consiste en definir la semilla generadora del algoritmo kmeans optando por alguna de las que genera menor distancia entre las observaciones de un mismo cluster (es decir, los individuos de un cluster más parecidos entre sí).
+Se presentan los resultados para una muestra aleatoria de 100 y la representación gráfica para alguna de las semillas que minimizan las obsevaciones intra-cluster. 
+
+```{r, echo=FALSE, fig.width=6, fig.height=4}
+kable(table(almacen))
+barplot(c(q$tot.withinss, q$betweenss, q$totss), col = c(2,3,4), main = "Suma de Cuadrados", names.arg=c("Cuadrados Intra Grupos", "Cuadrados Inter Grupos", "Cuadrados Totales"))
+```
+
+### Gráficos con asignación a clusters sobre Variables estandarizadas y sin estandarizar
+
+```{r, echo=FALSE}
+par(mfrow = c(1,1), pch=16)
+plot(accionesz[,3:4],col=accionesz$cluster+1)
+points(q$centers, cex=3, col=5)
+```
+
+```{r, echo=FALSE}
+par(mfrow = c(1,1), pch=16)
+plot(acciones[,3:4],col=acciones$cluster+1) 
+```
+
+La estructura de Clusters obtenida no se ajusta del todo al conocimiento específico. Se observa que el algoritmo clasifica de acuerdo a lo esperado para las acciones que, en promedio, presentan la menor volatilidad respecto al mercado (representadas con el color *Verde*). Las mismas pagan en promedio los más altos dividendos. 
+El comprotamiento de los otros agrupamientos es más difuso y resulta menos intuitivo en términos del conocimiento especifico. 
+El cluster represnatado por el color *Azul* muestra una gran dispersión respecto a la volatilidad de las acciones agrupadas y, en promedio, es el grupo de acciones que paga menores dividendos. 
+Por su parte, el grupo representado en color *Rojo* es aquel que agrupa, en promedio, las acciones con mayor nivel de volatilidad respecto al mercado pero, contrariamente a lo que se podría esperar, pagan en promedio altos dividendos, similares al grupo de menor volatilidad respecto al mercado.
+
+De lo anterior se desprende que, a partir del conocimiento específico, este primer agrupamiento no consigue el objetivo buscado. Si bien se llega a un segmento de acciones de empresas que se ajusta al perfil *Conservador* de los clientes de *XYZ*, los perfiles de *Crecimiento* y *Especulativo* no se encuentran correctamente segmentados.
+
+## 5. Rating Crediticio
+
+```{r, echo=FALSE}
+head(db)
+```
+
+La calificación crediticia es una variable categórica ordinal. Sus valores responden a una clasificación del riesgo de imposibilidad de pago, por parte de una empresa, de cumplir con sus obligaciones financieras contractuales a su vencimiento, y las pérdidas económicas estimadas en caso de incumplimiento o incapacidad. El valor A representa el menor riesgo y C el mayor. 
+
+Esta variable puede resultar útil para enriquecer los datos originales de acciones aportando información para el análsis. Es esperable que las calificaciones más riesgosas correspondan al perfil especulativo, mientras que las de menor riesgo puedan ser asignadas al perfil conservador.
+
+
+## 6. Clustering Avanzado
+### Potencial número de clusters según Silueta
+```{r, echo=FALSE, fig.width=7, fig.height=4}
+fviz_nbclust(db1, hcut, method = 'silhouette')
+```
+
+### Dendograma Jerárquico
+
+```{r, echo=FALSE, fig.height=4, fig.align='center'}
+plot(h, hang = -1)
+```
+
+### Gráficos con asignación a cluster jerárquico agregando Credit Score
+
+```{r, echo=FALSE}
+par(mfrow = c(1,1), pch=16)
+plot(acciones[,c(3:4)],col=acciones$clusterh+1)
+points(centros[,-3], cex=3, col=5)
+```
+
+La estructura obtenida tras la aplicación de clustering jerárquico, considerando las calificaciones crediticias de los distintos sectores y países, es consistente con la intuición previa formada a partir del conocimiento específico.
+El segmento que en promedio presenta acciones menos volátiles respecto al mercado es el que presenta los dividendos pagos más altos. Mientras tanto, el que presenta en promedio acciones más volátiles es el que menores divdendos paga.
+
+Así, se observa una segmentación que puede ser asociada a los distintos perfiles de clientes de XYZ. El perfil *Conservador* se ve represenatado en las acciones de color *Rojo*. El perfil *Especulativo* está segmentado en color *Azul*. Fianlemente las acciones representadas con el color *Verde* se ajustan al perfil de los clientes de *Crecimiento* 
+
+
+## 7. Comparación de Algoritmos de Clustering
+
+```{r, echo=FALSE}
+addmargins(table(acciones$cluster, acciones$clusterh))
+```
+
+A pertir de esta tabla de contingencia se observa por un lado que, los clusters 1 y 2 de los distintos modelos están cruzados. Esto debería corregirse reasignando los nombres en alguno de los clusters. La conclusión más interesante sin embargo es que, con el clustering jerárquico (que es el que mejor representa el conocimiento específico) la cantidad de acciones que se asocian al grupo de clientes *Especulativo* es solo el 6% del total.   
+
+## 8. Visualización
+
+```{r, echo=FALSE}
+plot(a[,1],a[,2], col = a$acciones.cluster, pch = 16, xlab = 'Componente 1', ylab = 'Componente 2', main = "Cluster Inicial MDS")
+plot(b[,1],b[,2], col = b$acciones.clusterh, pch = 16, xlab = 'Componente 1', ylab = 'Componente 2', main = "Cluster Jerárquico con Score MDS")
+```
+
+Aplicando *MDS* para mejorar la visualización, se observa que dos clusters no resultan claramente diferenciados bajo el procedimiento de *KMEANS*. 
+Incorporando la variable de *calificación crediticia* y sustituyendo el método de clustering por el *Jerárquico*, MDS muestra una clara separación entre los clusters definidos.
+La primera dimensión de MDS puede interpretarse como el componente principal en que puede desagregarse la matriz de distancias del cluster jerárquico respetando lo más posible su estructura.
+
+## 9. Asignación
+
+Del análisis de la clasificación realizada surge que, para el perfil *Conservador* las acciones que más se adaptan son aquellas pertenecientes a países más desarrollados e industrias con mayor grado de madurez.
+Por el constrario en el perfil *Especulativo* se concentran en acciones del sector Financiero y economías emergentes o menor grado de desarrollo. 
+Para el perfil de *Crecimiento* se observa un peso importante del sector tecnológico en países emergentes y el fianciero para países con economías estables. 
+
+<br>
+Se presentan a continuación las tablas con las asignaciones de cada perfil según país y sector respectivamente.
+<br>
+
+```{r, echo=FALSE, fig.align="left"}
+kable(table(acciones$country, acciones$cliente))#, caption = "Por País")
+```
+<br>
+```{r, echo=FALSE, fig.align="left"}
+
+kable(table(acciones$sector, acciones$cliente))#, caption = "Por sector")
+```
+<br>
+Las siguientes tablas muestran las asignaciones a cada perfil, detallando la cantidad por país-industria:
+<br>
+
+#### Perfil conservador
+
+```{r, echo=FALSE, fig.align="left"}
+
+kable(head(Conser))#, caption = "Conservador")
+```
+<br>
+
+#### Perfil Crecimiento
+
+```{r, echo=FALSE, fig.align="left"}
+
+kable(head(Creci))#, caption = "Crecimiento")
+```
+<br>
+
+#### Perfil especulativo
+
+```{r, echo=FALSE, fig.align="left"}
+
+kable(head(Espe))#, caption = "Especulativo")
+```
+
+
+## 10. Conclusiones
+
+El trabajo realizado cumple con el objetivo trazado: se logra segmentar las acciones de empresas, de acuerdo con los distintos perfiles de los clientes de XYZ.
+Resulta interesante la importancia de incorporar más de una fuente de datos al análisis, lo que permitió un mejor desempeño que el observado únicamente considerando los datos de las acciones.
+Una recomendación a realizar es la de incorporar al análsis más acciones pertenecientes a sectores y mercados del segmento **especulativo** en función del desbalance que existe en el tamaño de la segmentación. 
+
